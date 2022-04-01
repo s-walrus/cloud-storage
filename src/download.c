@@ -12,8 +12,6 @@
 #include "transfer.c"
 #include "progress.c"
 
-#define NEW_FILE_MODE 0666
-
 int main(int argc, char *argv[])
 {
     char *file_name, *target_file_name, *hostname;
@@ -24,15 +22,10 @@ int main(int argc, char *argv[])
     } else if (argc == 4) {
         hostname = argv[1];
         file_name = argv[2];
+        // TODO if target_file_name is dir: tfn = tfn + hostname
         target_file_name = argv[3];
     } else {
         fprintf(stderr, "usage: ./get HOST FILE [DIST]\n");
-        return 1;
-    }
-
-    int file_fd = open(target_file_name, O_WRONLY | O_CREAT, NEW_FILE_MODE);
-    if (file_fd == -1) {
-        perror("open");
         return 1;
     }
 
@@ -58,15 +51,14 @@ int main(int argc, char *argv[])
         perror("send");
         return 1;
     }
-    if ((n_bytes = send(sock_fd, target_file_name, file_name_size, 0)) != file_name_size) {
+    if ((n_bytes = send(sock_fd, file_name, file_name_size, 0)) != file_name_size) {
         perror("send");
         return 1;
     }
 
     // receive file
-    int ret = ReceiveFileWithSize(file_fd, sock_fd, DrawProgressBar);
+    int ret = SafeReceiveFileWithSize(target_file_name, sock_fd, 0644, DrawProgressBar);
 
-    close(file_fd);
     close(sock_fd);
 
     return ret;

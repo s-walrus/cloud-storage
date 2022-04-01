@@ -1,3 +1,5 @@
+// TODO optimize imports in src/*
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <sys/param.h>
@@ -7,8 +9,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
 
-#define BUF_SIZE 256
+#define BUF_SIZE 4096
 #define PORT "3490" // the port client will be connecting to 
 
 typedef uint64_t fsize_t;
@@ -100,6 +104,65 @@ int ReceiveFileWithSize(int file_fd, int sock_fd, void (*progress_callback)(size
             perror("write");
             return 1;
         }
+    }
+
+    return 0;
+}
+
+const char *GetTmpPath() {
+    char *ret;
+    if ((ret = getenv("XDG_RUNTIME_DIR"))) {
+        return ret;
+    }
+    if ((ret = getenv("TMPDIR"))) {
+        return ret;
+    }
+    return "/tmp";
+}
+
+void GenerateTmpFileName(char *dest) {
+    sprintf(dest, "trans%d", getpid());
+}
+
+int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode, void (*progress_callback)(size_t, size_t)) {
+    // create temp file
+    const char *tmp_path = GetTmpPath();
+    size_t tmp_path_len = strlen(tmp_path);
+    char tmp_file_path[tmp_path_len + FILENAME_MAX + 1];
+    strcpy(tmp_file_path, tmp_path);
+    tmp_file_path[tmp_path_len] = '/';
+    GenerateTmpFileName(tmp_file_path + tmp_path_len + 1);
+
+    int tmp_fd = open(tmp_file_path, O_WRONLY | O_CREAT | O_EXCL, mode);
+    if (tmp_fd == -1) {
+        perror("open");
+        fprintf(stderr, "safe_receive: cannot create temp file at %s, aborting...\n", tmp_path);
+        return 1;
+    }
+
+    // receive file
+    int ret = ReceiveFileWithSize(tmp_fd, sock_fd, progress_callback);
+    if (ret) {
+        fprintf(stderr, "safe_receive: download failed, aborting...\n");
+        close(tmp_fd);
+        remove(tmp_file_path);
+        return 1;
+    }
+
+    close(tmp_fd);
+
+    // move temp file
+    if (rename(tmp_file_path, target_path)) {
+        if (errno == EXDEV) {
+            // FIXME copy tmp_file to target_path and remove tmp_file instead of callilng system
+            char cmd[5 + strlen(tmp_file_path) + strlen(target_path)];
+            sprintf(cmd, "mv %s %s", tmp_file_path, target_path);
+            fprintf(stderr, "%s\n", cmd);
+            return system(cmd);
+        }
+        perror("rename");
+        fprintf(stderr, "safe_receive: failed to create file, aborting...\n");
+        return 1;
     }
 
     return 0;

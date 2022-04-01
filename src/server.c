@@ -18,6 +18,7 @@
 
 #include "transfer.c"
 
+// TODO specify port in argv
 // FIXME убрать константы в enum
 #define PORT "3490"  // the port users will be connecting to
 #define BACKLOG 10   // how many pending connections queue will hold
@@ -45,8 +46,8 @@ int IsFilenameValid(const char *filename) {
     return 1;
 }
 
-int HandleDownloadRequest(int dir_fd, int sock_fd, const char *filename) {
-    int file_fd = openat(dir_fd, filename, O_RDONLY, 0);
+int HandleDownloadRequest(int dir_fd, int sock_fd, const char *file_name) {
+    int file_fd = openat(dir_fd, file_name, O_RDONLY, 0);
     if (file_fd == -1) {
         perror("open");
         return 1;
@@ -55,18 +56,16 @@ int HandleDownloadRequest(int dir_fd, int sock_fd, const char *filename) {
     return SendFileWithSize(file_fd, sock_fd, NULL);
 }
 
-int HandleUploadRequest(int dir_fd, int sock_fd, const char *filename) {
-    // TODO download to temp file, then move to actual file
-    int file_fd = openat(dir_fd, filename, O_WRONLY | O_CREAT, NEW_FILE_MODE);
-    if (file_fd == -1) {
-        perror("open");
-        return 1;
-    }
+int HandleUploadRequest(const char *dir_path, int sock_fd, const char *file_name) {
+    char file_path[strlen(dir_path) + strlen(file_name) + 2];
+    strcpy(file_path, dir_path);
+    strcat(file_path, "/");
+    strcat(file_path, file_name);
     // TODO handle error
-    return ReceiveFileWithSize(file_fd, sock_fd, NULL);
+    return SafeReceiveFileWithSize(file_path, sock_fd, NEW_FILE_MODE, NULL);
 }
 
-int HandleRequest(int dir_fd, int sock_fd) {
+int HandleRequest(char *dir_path, int dir_fd, int sock_fd) {
     int bytes_read;
 
     // get request type
@@ -105,7 +104,7 @@ int HandleRequest(int dir_fd, int sock_fd) {
     if (strcmp(req_type, "DOW") == 0) {
         ret = HandleDownloadRequest(dir_fd, sock_fd, filename);
     } else if (strcmp(req_type, "UPL") == 0) {
-        ret = HandleUploadRequest(dir_fd, sock_fd, filename);
+        ret = HandleUploadRequest(dir_path, sock_fd, filename);
     } else {
         fprintf(stderr, "bad request type: %s\n", req_type);
         return 1;
@@ -115,6 +114,7 @@ int HandleRequest(int dir_fd, int sock_fd) {
 }
 
 int main(int argc, char *argv[]) {
+    // TODO reorganize code
     int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
     struct addrinfo hints, *servinfo, *p;
     struct sockaddr_storage their_addr;  // connector's address information
@@ -130,7 +130,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "usage: client DIR\n");
         return 1;
     }
-    dir = opendir(argv[1]);
+    // assuming dir_path always points to dir (i.e. it is not woved, deleted, etc.)
+    char *dir_path = argv[1];
+    dir = opendir(dir_path);
     if (dir == NULL) {
         perror("opendir");
         return 1;
@@ -210,7 +212,7 @@ int main(int argc, char *argv[]) {
 
         if (!fork()) {  // this is the child process
             close(sockfd);
-            HandleRequest(dir_fd, new_fd);
+            HandleRequest(dir_path, dir_fd, new_fd);
             close(new_fd);
             _exit(0);
         }
