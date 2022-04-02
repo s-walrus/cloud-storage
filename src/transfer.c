@@ -12,7 +12,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define BUF_SIZE 4096
+#define TRANS_BUF_SIZE 4096
+#define TRANS_DEFAULT_PORT "3490"
 
 typedef uint64_t fsize_t;
 typedef unsigned char filenamesize_t;
@@ -52,10 +53,10 @@ int SendFileWithSize(int file_fd, int sock_fd,
         return 1;
     }
 
-    char buf[BUF_SIZE];
+    char buf[TRANS_BUF_SIZE];
     fsize_t offset = 0;
     while (offset < file_size) {
-        n_bytes = read(file_fd, buf, MIN(BUF_SIZE - 1, file_size - offset));
+        n_bytes = read(file_fd, buf, MIN(TRANS_BUF_SIZE - 1, file_size - offset));
         if (n_bytes == 0) {
             fprintf(stderr, "unexpected EOF\n");
             return 1;
@@ -97,11 +98,11 @@ int ReceiveFileWithSize(int file_fd, int sock_fd,
         return 1;
     }
 
-    char buf[BUF_SIZE];
+    char buf[TRANS_BUF_SIZE];
     fsize_t offset = 0;
     while (offset < file_size) {
         bytes_read =
-            recv(sock_fd, buf, MIN(BUF_SIZE - 1, file_size - offset), 0);
+            recv(sock_fd, buf, MIN(TRANS_BUF_SIZE - 1, file_size - offset), 0);
         if (bytes_read == 0) {
             fprintf(stderr, "unexpected EOF\n");
             return 1;

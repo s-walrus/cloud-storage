@@ -116,7 +116,7 @@ int main(int argc, char *argv[]) {
 
     if (argc == 2) {
         dir_path = argv[1];
-        port = "3490";
+        port = TRANS_DEFAULT_PORT;
     } else if (argc == 3) {
         dir_path = argv[1];
         port = argv[2];

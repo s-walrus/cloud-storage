@@ -21,13 +21,13 @@ int main(int argc, char *argv[]) {
         hostname = argv[1];
         file_name = argv[2];
         target_file_name = argv[2];
-        port = "3490";
+        port = TRANS_DEFAULT_PORT;
     } else if (argc == 4) {
         hostname = argv[1];
         file_name = argv[2];
         // TODO if target_file_name is dir: tfn = tfn + hostname
         target_file_name = argv[3];
-        port = "3490";
+        port = TRANS_DEFAULT_PORT;
     } else if (argc == 4) {
         hostname = argv[1];
         file_name = argv[2];
