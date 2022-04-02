@@ -18,15 +18,13 @@
 
 #include "transfer.c"
 
-// TODO specify port in argv
-// FIXME убрать константы в enum
-#define PORT "3490"  // the port users will be connecting to
-#define BACKLOG 10   // how many pending connections queue will hold
-#define REQ_TYPE_LEN 3
-#define NEW_FILE_MODE 0640
+#define SERV_BACKLOG 10  // how many pending connections queue will hold
+#define SERV_REQ_TYPE_LEN 3
+#define SERV_FILE_MODE 0640
+
+// Client-server communication is described in "transfer.c"
 
 void SigchldHandler(int s) {
-    // waitpid() might overwrite errno, so we save and restore it:
     int saved_errno = errno;
 
     while (waitpid(-1, NULL, WNOHANG) > 0)
@@ -52,30 +50,29 @@ int HandleDownloadRequest(int dir_fd, int sock_fd, const char *file_name) {
         perror("open");
         return 1;
     }
-    // TODO handle error
     return SendFileWithSize(file_fd, sock_fd, NULL);
 }
 
-int HandleUploadRequest(const char *dir_path, int sock_fd, const char *file_name) {
+int HandleUploadRequest(const char *dir_path, int sock_fd,
+                        const char *file_name) {
     char file_path[strlen(dir_path) + strlen(file_name) + 2];
     strcpy(file_path, dir_path);
     strcat(file_path, "/");
     strcat(file_path, file_name);
-    // TODO handle error
-    return SafeReceiveFileWithSize(file_path, sock_fd, NEW_FILE_MODE, NULL);
+    return SafeReceiveFileWithSize(file_path, sock_fd, SERV_FILE_MODE, NULL);
 }
 
 int HandleRequest(char *dir_path, int dir_fd, int sock_fd) {
     int bytes_read;
 
     // get request type
-    char req_type[REQ_TYPE_LEN + 1];
-    if ((bytes_read = recv(sock_fd, req_type, REQ_TYPE_LEN, 0)) !=
-        REQ_TYPE_LEN) {
+    char req_type[SERV_REQ_TYPE_LEN + 1];
+    if ((bytes_read = recv(sock_fd, req_type, SERV_REQ_TYPE_LEN, 0)) !=
+        SERV_REQ_TYPE_LEN) {
         perror("recv");
         return 1;
     }
-    req_type[REQ_TYPE_LEN] = '\0';
+    req_type[SERV_REQ_TYPE_LEN] = '\0';
 
     // get filename length
     filenamesize_t filename_size;
@@ -114,81 +111,47 @@ int HandleRequest(char *dir_path, int dir_fd, int sock_fd) {
 }
 
 int main(int argc, char *argv[]) {
-    // TODO reorganize code
-    int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
-    struct addrinfo hints, *servinfo, *p;
-    struct sockaddr_storage their_addr;  // connector's address information
-    socklen_t sin_size;
-    struct sigaction sa;
-    int yes = 1;
-    char s[INET6_ADDRSTRLEN];
-    int rv;
-    DIR *dir;
-    int dir_fd;
+    char *dir_path;
+    char *port;
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: client DIR\n");
+    if (argc == 2) {
+        dir_path = argv[1];
+        port = "3490";
+    } else if (argc == 3) {
+        dir_path = argv[1];
+        port = argv[2];
+    } else {
+        fprintf(stderr, "usage: ./server DIR [PORT]\n");
         return 1;
     }
-    // assuming dir_path always points to dir (i.e. it is not woved, deleted, etc.)
-    char *dir_path = argv[1];
-    dir = opendir(dir_path);
+
+    // assuming dir_path always points to dir (i.e. it is not woved, deleted,
+    // etc.)
+    // FIXME avoid using dir_path, always use DIR* instead
+    DIR *dir = opendir(dir_path);
     if (dir == NULL) {
         perror("opendir");
         return 1;
     }
-    dir_fd = dirfd(dir);
+    int dir_fd = dirfd(dir);
     if (dir_fd == -1) {
         perror("dirfd");
         return 1;
     }
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;  // use my IP
-
-    if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+    int sock_fd = ConnectTo(NULL, port);
+    if (sock_fd == -1) {
         return 1;
     }
-
-    // loop through all the results and bind to the first we can
-    for (p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) ==
-            -1) {
-            perror("server: socket");
-            continue;
-        }
-
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) ==
-            -1) {
-            perror("setsockopt");
-            exit(1);
-        }
-
-        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("server: bind");
-            continue;
-        }
-
-        break;
-    }
-
-    freeaddrinfo(servinfo);  // all done with this structure
-
-    if (p == NULL) {
-        fprintf(stderr, "server: failed to bind\n");
-        exit(1);
-    }
-
-    if (listen(sockfd, BACKLOG) == -1) {
+    if (listen(sock_fd, SERV_BACKLOG) == -1) {
         perror("listen");
         exit(1);
     }
+    printf("server: waiting for connections...\n");
 
-    sa.sa_handler = SigchldHandler;  // reap all dead processes
+    // wait for zombie-children on SIGCHLD
+    struct sigaction sa;
+    sa.sa_handler = SigchldHandler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     if (sigaction(SIGCHLD, &sa, NULL) == -1) {
@@ -196,22 +159,24 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("server: waiting for connections...\n");
-
-    while (1) {  // main accept() loop
-        sin_size = sizeof their_addr;
-        new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+    while (1) {
+        struct sockaddr_storage client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        int new_fd =
+            accept(sock_fd, (struct sockaddr *)&client_addr, &addr_len);
         if (new_fd == -1) {
             perror("accept");
             continue;
         }
 
-        inet_ntop(their_addr.ss_family,
-                  GetSocketIP((struct sockaddr *)&their_addr), s, sizeof s);
-        printf("server: got connection from %s\n", s);
+        char addr_s[INET6_ADDRSTRLEN];
+        inet_ntop(client_addr.ss_family,
+                  GetSocketIP((struct sockaddr *)&client_addr), addr_s,
+                  sizeof addr_s);
+        printf("server: got connection from %s\n", addr_s);
 
-        if (!fork()) {  // this is the child process
-            close(sockfd);
+        if (!fork()) {
+            close(sock_fd);
             HandleRequest(dir_path, dir_fd, new_fd);
             close(new_fd);
             _exit(0);
@@ -220,8 +185,10 @@ int main(int argc, char *argv[]) {
         close(new_fd);
     }
 
-    // TODO wait for forks
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
     closedir(dir);
+    close(sock_fd);
 
     return 0;
 }

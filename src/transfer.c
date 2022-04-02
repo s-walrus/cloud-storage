@@ -1,24 +1,40 @@
-// TODO optimize imports in src/*
+#include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
+#include <netdb.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/param.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <netdb.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <fcntl.h>
 
 #define BUF_SIZE 4096
-#define PORT "3490" // the port client will be connecting to 
 
 typedef uint64_t fsize_t;
 typedef unsigned char filenamesize_t;
 
-int SendFileWithSize(int file_fd, int sock_fd, void (*progress_callback)(size_t, size_t)) {
+// == Client-serer communication ==
+//
+// There are two types of request a client can make:
+// * upload: client sends a file
+// * download: client receives a file
+//
+// To make a request, client sends the following data in the specified order to
+// a TCP channel:
+// REQ_TYPE FILE_NAME_LEN FILE_NAME [FILE_SIZE] [FILE]
+//
+// REQ_TYPE         is either "UPL" for upload or "DOW" for download
+// FILE_NAME_LEN    is an integer, represended by sizeof(filenamesize_t) bytes
+// FILE_NAME        is string of FILE_NAME_LEN bytes
+// FILE_SIZE        is an integer, represented by sizeof(fsize_t) bytes
+// FILE             is file data, FILE_SIZE bytes
+
+int SendFileWithSize(int file_fd, int sock_fd,
+                     void (*progress_callback)(size_t, size_t)) {
     fsize_t n_bytes;
 
     // get file size
@@ -30,7 +46,7 @@ int SendFileWithSize(int file_fd, int sock_fd, void (*progress_callback)(size_t,
     fsize_t file_size = st.st_size;
 
     // send file size
-    if ((n_bytes = send(sock_fd, (char*)&file_size, sizeof(file_size), 0)) !=
+    if ((n_bytes = send(sock_fd, (char *)&file_size, sizeof(file_size), 0)) !=
         sizeof(file_size)) {
         perror("recv");
         return 1;
@@ -63,13 +79,14 @@ int SendFileWithSize(int file_fd, int sock_fd, void (*progress_callback)(size_t,
     return 0;
 }
 
-int ReceiveFileWithSize(int file_fd, int sock_fd, void (*progress_callback)(size_t, size_t)) {
+int ReceiveFileWithSize(int file_fd, int sock_fd,
+                        void (*progress_callback)(size_t, size_t)) {
     int bytes_read;
 
     // get file size
     fsize_t file_size;
-    if ((bytes_read = recv(sock_fd, (char*)&file_size, sizeof(file_size), 0)) !=
-        sizeof(file_size)) {
+    if ((bytes_read = recv(sock_fd, (char *)&file_size, sizeof(file_size),
+                           0)) != sizeof(file_size)) {
         perror("recv");
         return 1;
     }
@@ -120,11 +137,10 @@ const char *GetTmpPath() {
     return "/tmp";
 }
 
-void GenerateTmpFileName(char *dest) {
-    sprintf(dest, "trans%d", getpid());
-}
+void GenerateTmpFileName(char *dest) { sprintf(dest, "trans%d", getpid()); }
 
-int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode, void (*progress_callback)(size_t, size_t)) {
+int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode,
+                            void (*progress_callback)(size_t, size_t)) {
     // create temp file
     const char *tmp_path = GetTmpPath();
     size_t tmp_path_len = strlen(tmp_path);
@@ -136,7 +152,9 @@ int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode, void (*
     int tmp_fd = open(tmp_file_path, O_WRONLY | O_CREAT | O_EXCL, mode);
     if (tmp_fd == -1) {
         perror("open");
-        fprintf(stderr, "safe_receive: cannot create temp file at %s, aborting...\n", tmp_path);
+        fprintf(stderr,
+                "safe_receive: cannot create temp file at %s, aborting...\n",
+                tmp_path);
         return 1;
     }
 
@@ -154,7 +172,8 @@ int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode, void (*
     // move temp file
     if (rename(tmp_file_path, target_path)) {
         if (errno == EXDEV) {
-            // FIXME copy tmp_file to target_path and remove tmp_file instead of callilng system
+            // FIXME copy tmp_file to target_path and remove tmp_file instead of
+            // callilng system
             char cmd[5 + strlen(tmp_file_path) + strlen(target_path)];
             sprintf(cmd, "mv %s %s", tmp_file_path, target_path);
             fprintf(stderr, "%s\n", cmd);
@@ -168,50 +187,67 @@ int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode, void (*
     return 0;
 }
 
-int ConnectTo(char *hostname) {
-    int sock_fd;  
-    struct addrinfo hints, *servinfo, *p;
-    int rv;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    if ((rv = getaddrinfo(hostname, PORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return -1;
-    }
-
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sock_fd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            continue;
-        }
-        if (connect(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sock_fd);
-            continue;
-        }
-        break;
-    }
-
-    if (p == NULL) {
-        fprintf(stderr, "connection failed");
-        return -1;
-    }
-
-    // char s[INET6_ADDRSTRLEN];
-    /* inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
-            s, sizeof s);
-    printf("connecting to %s\n", s); */
-
-    freeaddrinfo(servinfo);
-
-    return sock_fd;
-}
-
 void *GetSocketIP(struct sockaddr *sa) {
     if (sa->sa_family == AF_INET) {
         return &(((struct sockaddr_in *)sa)->sin_addr);
     }
 
     return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
+
+int ConnectTo(char *hostname, char *port) {
+    int sock_fd;
+    struct addrinfo hints, *servinfo, *p;
+    int rv;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (hostname == NULL) {
+        hints.ai_flags = AI_PASSIVE;
+    }
+
+    if ((rv = getaddrinfo(hostname, port, &hints, &servinfo)) != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return -1;
+    }
+
+    for (p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sock_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) ==
+            -1) {
+            continue;
+        }
+
+        if (hostname == NULL) {
+            int yes = 1;
+            if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes,
+                           sizeof(yes)) == -1) {
+                perror("setsockopt");
+                exit(1);
+            }
+            if (bind(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
+                close(sock_fd);
+                continue;
+            }
+        } else {
+            if (connect(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
+                close(sock_fd);
+                continue;
+            }
+        }
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "connection failed\n");
+        return -1;
+    }
+
+    char s[INET6_ADDRSTRLEN];
+    inet_ntop(p->ai_family, GetSocketIP((struct sockaddr *)p->ai_addr), s,
+              sizeof s);
+    printf("connecting to %s\n", s);
+
+    freeaddrinfo(servinfo);
+
+    return sock_fd;
 }

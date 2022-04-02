@@ -1,5 +1,5 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 void DrawProgressBar(size_t completed, size_t total) {
     static int last_percent_printed = 0;
