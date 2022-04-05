@@ -29,12 +29,14 @@ bin/get 193.164.149.95 local_file
 
 Set up a server:
 ```bash
+# manually
 make server
-
-# usage: ./server DIR [PORT]
-
 mkdir storage_dir
 bin/server storage_dir
+# usage: ./server DIR [PORT]
+
+# or using docker
+docker run -d -p 3490:3490 swalrus/storage
 
 # server is set up at localhost
 bin/send localhost /path/to/local_file
