@@ -176,7 +176,7 @@ int SafeReceiveFileWithSize(char *target_path, int sock_fd, mode_t mode,
             // FIXME copy tmp_file to target_path and remove tmp_file instead of
             // callilng system
             char cmd[5 + strlen(tmp_file_path) + strlen(target_path)];
-            sprintf(cmd, "mv %s %s", tmp_file_path, target_path);
+            sprintf(cmd, "mv '%s' '%s'", tmp_file_path, target_path);
             fprintf(stderr, "%s\n", cmd);
             return system(cmd);
         }
