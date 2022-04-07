@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "transfer.c"
+#include "network.c"
 
 #define SERV_BACKLOG 10  // how many pending connections queue will hold
 #define SERV_REQ_TYPE_LEN 3

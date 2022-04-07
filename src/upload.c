@@ -12,6 +12,7 @@
 
 #include "progress.c"
 #include "transfer.c"
+#include "network.c"
 
 // Client-server communication is described in "transfer.c"
 
